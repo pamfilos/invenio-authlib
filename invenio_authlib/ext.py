@@ -29,7 +29,7 @@ class InvenioAuthlib(object):
         self.auth = OAuth(app,
                           fetch_token=_fetch_token,
                           update_token=_update_token)
-        self.register_oauth_services()
+        self.register_oauth_services(app)
         app.extensions['cap-auth'] = self
 
     def init_config(self, app):
@@ -44,6 +44,6 @@ class InvenioAuthlib(object):
             if k.startswith('AUTHLIB_'):
                 app.config.setdefault(k, getattr(config, k))
 
-    def register_oauth_services(self):
-        for service in config.AUTHLIB_SERVICES:
-            self.auth.register(**config.AUTHLIB_SERVICES[service])
+    def register_oauth_services(self, app):
+        for service in app.config.get('AUTHLIB_SERVICES', []):
+            self.auth.register(**app.config['AUTHLIB_SERVICES'][service])

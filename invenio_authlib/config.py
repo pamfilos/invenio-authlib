@@ -80,7 +80,7 @@ AUTHLIB_SERVICES = {
         authorize_url='https://oauth.web.cern.ch/OAuth/Authorize',
         api_base_url='https://oauthresource.web.cern.ch/api/',
         client_kwargs={
-            'scope': 'read:user',
+            'scope': 'user:read',
             'token_endpoint_auth_method': 'client_secret_post',
         }
     ),
@@ -97,3 +97,7 @@ AUTHLIB_SERVICES = {
          },
          extra_data_method=orcid_extra_data)
 }
+
+AUTHLIB_ALLOWED_HOSTS = [
+    "zacharias-macbook.dyndns.cern.ch"
+]

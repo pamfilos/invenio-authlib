@@ -1,0 +1,8 @@
+set -e
+export FLASK_APP=./app.py
+export CERN_CLIENT_ID=zzacharo_auth
+export CERN_CLIENT_SECRET=48EJt01Uf5lX6442BubHAMi03p8GbYI0hQBqyD1qMPM1
+script_path=$(dirname "$0")
+FLASK_ENV=development flask run -h 0.0.0.0 \
+    --cert "$script_path"/certs/test.crt \
+    --key "$script_path"/certs/test.key

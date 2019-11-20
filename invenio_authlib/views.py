@@ -16,7 +16,7 @@ from invenio_db import db
 # from sqlalchemy.orm.attributes import flag_modified
 
 from flask import Blueprint, url_for, current_app, jsonify, \
-    request, redirect, session
+    request, redirect, session, abort
 from flask_login import current_user, login_required, login_user
 
 # from flask_security.utils import verify_password
@@ -27,8 +27,8 @@ from .proxies import current_auth
 from .models import OAuth2Token
 
 # from invenio_userprofiles.models import UserProfile
-from .config import AUTHLIB_SERVICES
-from .utils import _create_or_update_token
+from .utils import _create_or_update_token, get_safe_redirect_target
+from .proxies import current_auth
 
 _datastore = LocalProxy(lambda: current_app.extensions['security'].datastore)
 
@@ -41,41 +41,21 @@ blueprint = Blueprint(
 )
 
 
-@blueprint.route('/local_login')
-def local_login():
-    """Login local user."""
-    if current_user.is_authenticated:
-        return jsonify({"message": "o zahos ine malakas"})
-    # Fetch user from db
-    user = _datastore.get_user("info@inveniosoftware.org")
+@blueprint.route('/login/<remote_app>')
+def login(remote_app):
+    if not getattr(current_auth, remote_app, None):
+        return abort(404)
 
-    if user:
-        try:
-            login_user(user)
-            return jsonify({"user": current_user.email, "next": "next"})
-        except Exception:
-            return jsonify({
-                "error":
-                "Something went wrong with the login. Please try again"
-            }), 400
-    else:
-        return jsonify({
-            "error":
-            "The credentials you enter are not correct. Please try again"
-        }), 403
-
-
-@blueprint.route('/connect/<name>')
-# @login_required
-def connect(name):
     next_param = request.args.get('next')
+    # Get redirect target in safe manner.
+    next_param = get_safe_redirect_target(arg='next')
     session['next'] = next_param or None
     ui_flag = request.args.get('ui')
     session['ui'] = ui_flag or None
 
-    client = current_auth.create_client(name)
+    client = current_auth.create_client(remote_app)
     redirect_uri = url_for('invenio_authlib.authorize',
-                           name=name, _external=True)
+                           remote_app=remote_app, _external=True)
     # DEV FIX for 'CERN Gitlab' to work locally since you can't register
     # 'localhost' redirect_uri for testing
     #
@@ -94,23 +74,31 @@ def connect(name):
     return client.authorize_redirect(redirect_uri)
 
 
-@blueprint.route('/authorize/<name>')
-# @login_required
-def authorize(name):
+@blueprint.route('/authorize/<remote_app>')
+def authorize(remote_app):
     ui_flag = session.pop('ui', None)
 
-    client = current_auth.create_client(name)
+    client = current_auth.create_client(remote_app)
     token = client.authorize_access_token()
 
-    configs = AUTHLIB_SERVICES.get(name.upper(), {})
-    extra_data_method = configs.get('extra_data_method')
+    profile = get_oauth_profile(remote_app, token, client)
+    authorized_user_email = profile[0]['Value']
+
+    user = _datastore.get_user(authorized_user_email)
+    if not user:
+       user = _datastore.create_user(email=authorized_user_email)
+
+    login_user(user)
+
+    services = current_app.config.get("AUTHLIB_SERVICES", {}).get(remote_app.upper(), {})
+    extra_data_method = services.get('extra_data_method')
 
     # TOFIX Add error handlers for reject, auth errors, etc
     extra_data = {}
     if (extra_data_method):
         extra_data = extra_data_method(client, token)
 
-    _token = _create_or_update_token(name, token)
+    _token = _create_or_update_token(remote_app, token)
     _token.extra_data = extra_data
 
     db.session.add(_token)
@@ -134,42 +122,43 @@ def authorize(name):
 
     db.session.commit()
 
-    if ui_flag:
-        if current_app.config['DEBUG']:
-            redirect_url = "http://localhost:3000/settings/auth/connect"
-        else:
-            redirect_url = "/settings/auth/connect"
-        return redirect(redirect_url)
-    else:
-        return jsonify({
-            "message": "Authorization to {} succeeded".format(name)
-        }), 200
+    # if ui_flag:
+    #     if current_app.config['DEBUG']:
+    #         redirect_url = "http://localhost:3000/settings/auth/connect"
+    #     else:
+    #         redirect_url = "/settings/auth/connect"
+    #     return redirect(redirect_url)
+    # else:
+    #     return jsonify({
+    #         "message": "Authorization to {} succeeded".format(name)
+    #     }), 200
+    return jsonify(profile), 200
 
 
-@blueprint.route('/profile/<name>')
+@blueprint.route('/profile/<remote_app>')
 # @login_required
-def profile(name):
-    profile = get_oauth_profile(name)
+def profile(remote_app):
+    profile = get_oauth_profile(remote_app)
 
     return jsonify(profile)
 
 
-def get_oauth_profile(name, token=None, client=None):
+def get_oauth_profile(remote_app, token=None, client=None):
     if token:
         _token = token
     else:
-        _token = OAuth2Token.get(name=name, user_id=current_user.id)
+        _token = OAuth2Token.get(remote_app=remote_app, user_id=current_user.id)
 
     if not _token:
         return jsonify({"message":
                         "Your account is not connected to the service"}), 403
 
-    extra_data = _token.extra_data
+    # extra_data = _token.extra_data
 
     if client:
         _client = client
     else:
-        _client = current_auth.create_client(name)
+        _client = current_auth.create_client(remote_app)
 
     # return the user profile based on the service
     user_path = {
@@ -179,12 +168,13 @@ def get_oauth_profile(name, token=None, client=None):
         'cern': 'Me'
     }
 
-    if name == 'orcid':
-        orcid_id = extra_data.get('orcid_id')
-        resp = _client.get("/{}/record".format(orcid_id),
-                           headers={'Accept': 'application/json'}) \
-            if orcid_id else None
-    else:
-        resp = _client.get(user_path[name])
+    # if name == 'orcid':
+    #     orcid_id = extra_data.get('orcid_id')
+    #     resp = _client.get("/{}/record".format(orcid_id),
+    #                        headers={'Accept': 'application/json'}) \
+    #         if orcid_id else None
+    # else:
+    #     resp = _client.get(user_path[name])
 
+    resp = _client.get(user_path[remote_app])
     return resp.json() if resp else {}
