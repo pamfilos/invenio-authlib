@@ -46,7 +46,7 @@ install_requires = [
     'invenio-accounts>=1.0.0',
     'invenio-db',
     'Authlib==0.12.1',
-    'requests==2.22.0',
+    'requests==2.31.0',
     'uritools>=1.0.1',
 ]
 
